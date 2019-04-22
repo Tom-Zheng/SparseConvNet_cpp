@@ -1,0 +1,4 @@
+sparseconvnet/build/
+.vscode/
+build/
+temp/
