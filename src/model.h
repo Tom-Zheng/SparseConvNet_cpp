@@ -1,21 +1,29 @@
+#ifndef MODEL_H_
+#define MODEL_H_
+
 #include <torch/torch.h>
+#include "sparseconvnet/SCN/sparseconvnet.h"
 #include <string>
 #include <vector>
 #include <map>
 
+class Sequential : public torch::nn::Sequential
+{
+public:
+    Sequential();
+    template<typename ModuleType>
+    Sequential& add(ModuleType module);
+};
+
 struct UNet : torch::nn::Module {
 public:
-    UNet(const char *conf_file, torch::Device *device);
-    torch::Tensor forward(torch::Tensor x);
+    UNet();
+    torch::Tensor forward(torch::Tensor coords, torch::Tensor features);
 
 private:
 	torch::Device *_device;
-	vector<map<string, string>> blocks;
-	torch::nn::Sequential features;
-	vector<torch::nn::Sequential> module_list;
-
-    void load_cfg(const char *cfg_file);
-    void create_modules();
-    int get_int_from_cfg(map<string, string> block, string key, int default_value);
-    string get_string_from_cfg(map<string, string> block, string key, string default_value);
+	Sequential seq;
+	// torch::nn::Sequential seq;
 };
+
+#endif

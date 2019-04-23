@@ -20,7 +20,8 @@ APPEND_TARGET_ARCH_FLAGS()
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} "--ftz=true;--prec-div=false;--prec-sqrt=false; -Xcompiler; -fopenmp")
 set(CUDA_HOST_COMPILER gcc-5)
 
-set(CMAKE_CXX_FLAGS "-O3 -msse2 -msse3 -Wall -std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0 -fopenmp")
+# set(CMAKE_CXX_FLAGS "-O3 -msse2 -msse3 -Wall -std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0 -fopenmp")
+set(CMAKE_CXX_FLAGS "-g -O0 -msse2 -msse3 -Wall -std=c++11 -D_GLIBCXX_USE_CXX11_ABI=0 -fopenmp")
 
 cuda_add_library(SCN_cuda_library STATIC ${cuda} )
 
