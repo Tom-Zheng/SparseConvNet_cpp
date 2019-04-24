@@ -8,36 +8,8 @@
 #include <tuple>
 #include <string>
 #include <vector>
-
-/**
- * SparseConvNetTensor
-*/
-class SparseConvNetTensor{
-public:
-    torch::Tensor features;     /*FloatTensor*/
-    std::shared_ptr<Metadata<3>> metadata;
-    torch::Tensor spatial_size; /*LongTensor*/
-
-    SparseConvNetTensor()   {
-    }
-
-    SparseConvNetTensor(torch::Tensor features_, 
-                        std::shared_ptr<Metadata<3>> metadata_, 
-                        torch::Tensor spatial_size_)   {
-        features = features_;
-        metadata = metadata_;
-        spatial_size = spatial_size_;
-    }
-
-    torch::Tensor cuda()  {
-        return features.cuda();
-    }
-
-    torch::Tensor cpu()  {
-        return features.cpu();
-    }
-};
-
+#include <fstream>
+#include <sstream>
 /**
  * Submanifold Convolution Layers
 */
@@ -93,6 +65,119 @@ public:
         SubmanifoldConvolution_updateOutput<3>(
             input.spatial_size,
             filter_size,
+            *(input.metadata),
+            input.features,
+            output.features,
+            weight,
+            torch::empty(0,options));
+
+        return output;
+    }
+};
+
+class Convolution : public torch::nn::Module
+{
+public:
+    int dimension;
+    int nIn;
+    int nOut;
+    torch::Tensor filter_size;
+    long filter_volume;
+    torch::Tensor filter_stride;
+    
+    torch::Tensor weight;
+
+    Convolution(int dimension_, 
+                int nIn_, 
+                int nOut_, 
+                int filter_size_, 
+                int filter_stride_, 
+                bool bias_) {
+        dimension = dimension_;
+        nIn = nIn_;
+        nOut = nOut_;
+        filter_size = toLongTensor(dimension, filter_size_);
+        filter_volume = filter_size.prod().item().toLong();
+        filter_stride = toLongTensor(dimension, filter_stride_);
+        double std = sqrt((2.0 / nIn / filter_volume));
+        weight = this->register_parameter("weight", torch::empty({filter_volume, nIn, nOut}).normal_(0, std).cuda());
+        if(bias_)  {
+            // Not implemented yet
+        }
+    }
+
+    SparseConvNetTensor forward(SparseConvNetTensor input) {
+        assert(input.features.size(0) == 0 || input.features.size(1) == nIn);
+        SparseConvNetTensor output;
+        output.metadata = input.metadata;
+        output.spatial_size = (input.spatial_size - filter_size) / filter_stride + 1;
+        
+        assert((((output.spatial_size - 1) * filter_stride + filter_size) == input.spatial_size).all().item().toInt());
+        
+        auto options = input.features.options();
+        output.features = torch::empty(0, options);
+
+        Convolution_updateOutput<3>(
+            input.spatial_size,
+            output.spatial_size,
+            filter_size,
+            filter_stride,
+            *(input.metadata),
+            input.features,
+            output.features,
+            weight,
+            torch::empty(0,options));
+
+        return output;
+    }
+};
+
+
+class Deconvolution : public torch::nn::Module
+{
+public:
+    int dimension;
+    int nIn;
+    int nOut;
+    torch::Tensor filter_size;
+    long filter_volume;
+    torch::Tensor filter_stride;
+    
+    torch::Tensor weight;
+
+    Deconvolution(int dimension_, 
+                int nIn_, 
+                int nOut_, 
+                int filter_size_, 
+                int filter_stride_, 
+                bool bias_) {
+        dimension = dimension_;
+        nIn = nIn_;
+        nOut = nOut_;
+        filter_size = toLongTensor(dimension, filter_size_);
+        filter_volume = filter_size.prod().item().toLong();
+        filter_stride = toLongTensor(dimension, filter_stride_);
+        double std = sqrt((2.0 / nIn / filter_volume));
+        weight = this->register_parameter("weight", torch::empty({filter_volume, nIn, nOut}).normal_(0, std).cuda());
+        if(bias_)  {
+            // Not implemented yet
+        }
+    }
+
+    SparseConvNetTensor forward(SparseConvNetTensor input) {
+        assert(input.features.size(0) == 0 || input.features.size(1) == nIn);
+        SparseConvNetTensor output;
+        output.metadata = input.metadata;
+        output.spatial_size = (input.spatial_size - filter_size) * filter_stride + filter_size;
+        
+        auto options = input.features.options();
+        output.features = torch::empty(0, options);
+
+        Deconvolution_updateOutput<3>(
+            input.spatial_size,
+            output.spatial_size,
+            filter_size,
+            filter_stride,
             *(input.metadata),
             input.features,
             output.features,
@@ -189,7 +274,7 @@ public:
     BatchNormLeakyReLU(int nPlanes_, 
                        double eps_ = 1e-4, 
                        double momentum_=0.9,
-                       double leakiness_=0.333)
+                       double leakiness_=0)
     {
         nPlanes = nPlanes_;
         eps = eps_;
@@ -235,92 +320,117 @@ public:
 };
 
 
-class ConcatTable : public torch::nn::Sequential
+class ConcatTable : public torch::nn::Module
 {
 public:
     ConcatTable() {}
 
     template<typename ModuleType>
-    ConcatTable& add(ModuleType module) {
-        this->get()->push_back(module);
+    ConcatTable& add(ModuleType module)
+    {
+        _modules->push_back(module);
         return *this;
     }
-    
-    template<typename ReturnType = SparseConvNetTensor>
-    std::vector<ReturnType> forward(SparseConvNetTensor input)  
+
+    SparseConvNetTensor forward(SparseConvNetTensor input)  
     {
-        std::vector<ReturnType> output;
-        auto iterator = this->get()->begin();
-        for (++iterator; iterator != this->get()->end(); ++iterator) {
-            output.push_back( iterator->any_forward(std::move(input)));
+        // Forward for each submodule
+        std::vector<SparseConvNetTensor> values;
+        auto iterator = _modules->begin();
+        for (; iterator != _modules->end(); ++iterator) {
+            values.push_back( iterator->forward<SparseConvNetTensor>(input));
         }
-    }
-};
-
-
-class JoinTable : public torch::nn::Sequential
-{
-public:
-    JoinTable() {}
-
-    template<typename ModuleType>
-    JoinTable& add(ModuleType module) {
-        this->get()->push_back(module);
-        return *this;
-    }
-
-    template<typename ReturnType = SparseConvNetTensor, 
-            typename InputType = std::vector<SparseConvNetTensor>>
-    ReturnType forward(InputType input)  
-    {
-        SparseConvNetTensor output;
-        output.metadata = input[0].metadata;
-        output.spatial_size = input[0].spatial_size;
         
-        auto options = input.features.options();
-
-        output.features = torch::empty(0, options);
+        // Join
+        SparseConvNetTensor output;
+        output.metadata = values[0].metadata;
+        output.spatial_size = values[0].spatial_size;
 
         // output.features = torch.cat([i.features for i in input], 1) if input[0].features.numel() else input[0].features
-        
-        for(auto iter : input)  {
-            output.features = torch::cat(output.features, *iter);
+        auto iterator_vector = values.begin();
+        output.features = iterator_vector->features;
+        for (++iterator_vector; iterator_vector != values.end(); ++iterator_vector) {
+            output.features = torch::cat({output.features, iterator_vector->features}, 1);
         }
-
+        
         return output;
     }
+
+    torch::nn::Sequential _modules;
 };
+
+// The original torch::nn::Sequential does not support nesting due to templatized return type,
+// here is a little hack to support nesting by specifying return type.
 
 Sequential::Sequential() {}
 
+Sequential& Sequential::add() {}
+
 template<typename ModuleType>
 Sequential& Sequential::add(ModuleType module) {
-    this->get()->push_back(module);
+    _modules->push_back(module);
     return *this;
 }
 
-UNet::UNet() {
-    long spatial_size[] = {20, 20, 20};
-    torch::Tensor spatial_size_tensor = torch::from_blob(spatial_size, {3}, torch::dtype(torch::kInt64));
+SparseConvNetTensor Sequential::forward(SparseConvNetTensor input)  {
+    return _modules->forward<SparseConvNetTensor>(input);
+}
 
-    int dimension = 3;
 
-    seq = Sequential().add(
-        InputLayer(dimension, spatial_size_tensor, 4)
+/*
+* Recursive function
+*/
+const int m = 16;
+const int unet_depth = 4;
+
+Sequential unet_block(int a, int b) {
+    return Sequential().add(
+        BatchNormLeakyReLU(a)
     ).add(
-        ConcatTable()
-        .add(
-            Identity()
-        )
-        .add(
-            Identity()
-        )
-    ).add(
-        JoinTable()
-    ).add(
-        OutputLayer(dimension)
+        SubmanifoldConvolution(3, a, b, 3, false)
     );
+}
+
+Sequential unet_build(int depth)  {
+    Sequential seq;
+    seq.add(unet_block(m*depth, m*depth));
+
+    if(depth < unet_depth) {
+        seq.add(
+            ConcatTable().add(
+                Identity()).add(
+                Sequential().add(
+                    BatchNormLeakyReLU(m*depth)).add(
+                    Convolution(3, m*depth, m*(depth+1), 2, 2, false)).add(
+                    unet_build(depth+1)).add(
+                    BatchNormLeakyReLU(m*(depth+1))).add(
+                    Deconvolution(3, m*(depth+1), m*depth, 2, 2, false))));
+        seq.add(unet_block(2*m*depth, m*depth));
+    }
+    return seq;
+}
+
+UNet::UNet() 
+{
+    long spatial_size[] = {16, 16, 16};
+    torch::Tensor spatial_size_tensor = torch::from_blob(spatial_size, {3}, torch::dtype(torch::kInt64));
+    int dimension = 3;
     
+    // Recursively build unet
+    
+    seq = torch::nn::Sequential(
+        InputLayer(dimension, spatial_size_tensor, 4),
+        Sequential().add(
+            SubmanifoldConvolution(dimension, 3, m, 3, false)
+        ).add(
+            unet_build(1)
+        ).add(
+            BatchNormLeakyReLU(m)
+        ),
+        OutputLayer(dimension),
+        torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true))
+    );
+
     std::string name = "sparsemodel";
     register_module(name, seq);
 }
@@ -330,6 +440,7 @@ torch::Tensor UNet::forward(torch::Tensor coords, torch::Tensor features){
     return seq->forward(input);
 }
 
-void load() {
-    // TODO
+int UNet::load()   {
+
+
 }

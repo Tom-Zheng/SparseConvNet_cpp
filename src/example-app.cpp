@@ -19,16 +19,7 @@ int main() {
   };
   torch::Tensor test_coord = torch::from_blob(test_coord_, {6,4}, torch::dtype(torch::kInt64));
   
-  float test_features_[] = {
-    1.0,
-    2.0,
-    3.0,
-    2.0,
-    1.0,
-    1.0
-  };
-
-  torch::Tensor test_features = torch::from_blob(test_features_, {6,1}, torch::dtype(torch::kFloat32));
+  torch::Tensor test_features = torch::randn({6,3}, torch::dtype(torch::kFloat32));
 
   float test_weights[] = {
     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
@@ -41,6 +32,8 @@ int main() {
   
   std::cout << output << std::endl;
   
+  // model.load();
+
 #if 0
   cnpy::NpyArray arr_ = cnpy::npy_load("/home/zheng/Desktop/cpp/scn_cpp/temp/arr.npy");
   torch::Tensor arr = torch::from_blob(arr_.data<float>(), {3,3,3}, torch::dtype(torch::kFloat32));
