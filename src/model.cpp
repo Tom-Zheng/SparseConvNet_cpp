@@ -168,7 +168,7 @@ public:
         assert(input.features.size(0) == 0 || input.features.size(1) == nIn);
         SparseConvNetTensor output;
         output.metadata = input.metadata;
-        output.spatial_size = (input.spatial_size - filter_size) * filter_stride + filter_size;
+        output.spatial_size = (input.spatial_size - 1) * filter_stride + filter_size;
         
         auto options = input.features.options();
         output.features = torch::empty(0, options);
@@ -184,7 +184,7 @@ public:
             weight,
             torch::empty(0,options));
 
-        return output;
+        return output;     
     }
 };
 
@@ -281,8 +281,8 @@ public:
         momentum = momentum_;
         leakiness = leakiness_;
 
-        running_mean = register_buffer("running_mean", torch::empty(nPlanes).fill_(0));
-        running_var = register_buffer("running_var", torch::empty(nPlanes).fill_(1));
+        running_mean = register_buffer("running_mean", torch::empty(nPlanes).fill_(0).cuda());
+        running_var = register_buffer("running_var", torch::empty(nPlanes).fill_(1).cuda());
 
         weight = register_parameter("weight", torch::empty(nPlanes).fill_(1).cuda());
         bias = register_parameter("bias", torch::empty(nPlanes).fill_(0).cuda());
@@ -350,6 +350,7 @@ public:
         auto iterator_vector = values.begin();
         output.features = iterator_vector->features;
         for (++iterator_vector; iterator_vector != values.end(); ++iterator_vector) {
+
             output.features = torch::cat({output.features, iterator_vector->features}, 1);
         }
         
@@ -417,7 +418,11 @@ UNet::UNet()
     int dimension = 3;
     
     // Recursively build unet
-    
+#if 1
+
+    auto linear = torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true));
+    linear->to(torch::kCUDA);
+
     seq = torch::nn::Sequential(
         InputLayer(dimension, spatial_size_tensor, 4),
         Sequential().add(
@@ -428,8 +433,25 @@ UNet::UNet()
             BatchNormLeakyReLU(m)
         ),
         OutputLayer(dimension),
-        torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true))
+        linear
     );
+#endif
+
+#if 0
+    auto linear = torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true));
+    linear->to(torch::kCUDA);
+
+    seq = torch::nn::Sequential(
+        InputLayer(dimension, spatial_size_tensor, 4),
+        ConcatTable().add(
+            Identity()).add(
+            Sequential().add(
+                Convolution(dimension,3,m,2,2,false)).add(
+                Deconvolution(dimension,m,1,2,2,false))),
+        OutputLayer(dimension)
+        // linear
+    );
+#endif
 
     std::string name = "sparsemodel";
     register_module(name, seq);
