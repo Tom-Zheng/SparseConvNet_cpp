@@ -1,12 +1,7 @@
 #include <torch/torch.h>
 #include "model.h"
-
 #include <iostream>
 #include <memory>
-
-#include "utils.h"
-
-#include <cnpy.h>
 
 int main() {
   long test_coord_[] = {
@@ -30,8 +25,6 @@ int main() {
   
   torch::Tensor test_features = torch::from_blob(test_features_, {6,3}, torch::dtype(torch::kFloat32));
 
-  // torch::Tensor test_features = torch::randn({6,3}, torch::dtype(torch::kFloat32));
-  
   // std::string dir = "";
   std::string dir = "/home/zheng/Desktop/cpp/original/SparseConvNet/examples/ScanNet_original/weight";
 
@@ -39,13 +32,6 @@ int main() {
   auto output = model.forward(test_coord, test_features);
   
   std::cout << output << std::endl;
-
-#if 0
-  cnpy::NpyArray arr_ = cnpy::npy_load("/home/zheng/Desktop/cpp/scn_cpp/temp/arr.npy");
-  torch::Tensor arr = torch::from_blob(arr_.data<float>(), {3,3,3}, torch::dtype(torch::kFloat32));
-  
-  std::cout << arr << std::endl;
-#endif
 
   return 0;
 }
