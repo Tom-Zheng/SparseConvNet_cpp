@@ -53,12 +53,9 @@ public:
 
 struct UNet : torch::nn::Module {
 public:
-    UNet();
-
+    UNet(std::string weights_path);
     torch::Tensor forward(torch::Tensor coords, torch::Tensor features);
     
-    int load();
-
 private:
 	torch::Device *_device;
 	// Sequential seq;

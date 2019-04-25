@@ -19,15 +19,21 @@ int main() {
   };
   torch::Tensor test_coord = torch::from_blob(test_coord_, {6,4}, torch::dtype(torch::kInt64));
   
-  torch::Tensor test_features = torch::randn({6,3}, torch::dtype(torch::kFloat32));
-
-  float test_weights[] = {
-    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
-    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
-    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+  float test_features_[] = {
+    -1.3784,
+    -0.5840,
+     0.0973,
+     0.0413,
+     1.1464,
+    -0.2558
   };
   
-  auto model = UNet();
+  torch::Tensor test_features = torch::from_blob(test_features_, {6,1}, torch::dtype(torch::kFloat32));
+
+  // torch::Tensor test_features = torch::randn({6,3}, torch::dtype(torch::kFloat32));
+  
+  std::string dir = "/home/zheng/Desktop/cpp/scn_cpp/save";
+  auto model = UNet(dir);
   auto output = model.forward(test_coord, test_features);
   
   std::cout << output << std::endl;

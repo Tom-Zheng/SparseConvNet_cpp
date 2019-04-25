@@ -10,6 +10,26 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <cnpy.h>
+
+/*
+* Load PATH
+*/
+
+std::string path;
+
+torch::Tensor LoadNpy(std::string layer_name, torch::Tensor weight) {
+    cnpy::NpyArray arr_ = cnpy::npy_load(path + std::string("/") + layer_name + std::string(".npy"));
+    c10::IntList shape((long*)arr_.shape.data(), arr_.shape.size());
+
+    // std::cout << arr_.shape << std::endl;
+    // std::cout << weight.sizes() << std::endl;
+    assert(shape == weight.sizes());
+
+    return torch::from_blob(arr_.data<float>(), shape, torch::dtype(torch::kFloat32)).cuda();
+}
+
+
 /**
  * Submanifold Convolution Layers
 */
@@ -17,6 +37,7 @@ class Identity : public torch::nn::Module
 {
 public:
     Identity(){
+
     }
 
     SparseConvNetTensor forward(SparseConvNetTensor input) {
@@ -35,6 +56,9 @@ public:
     long filter_volume;
     torch::Tensor weight;
 
+    static int layer_id;
+    std::string layer_name;
+
     SubmanifoldConvolution(int dimension_, 
                            int nIn_, 
                            int nOut_, 
@@ -50,6 +74,14 @@ public:
         if(bias_)  {
             // Not implemented yet
         }
+        
+        layer_name = std::string("SubmanifoldConvolution_") + std::to_string(layer_id);
+        layer_id++;
+
+        if(path.length())   {
+            weight = LoadNpy(layer_name, weight);
+        }
+        // std::cout << layer_name << std::endl;
     }
 
     SparseConvNetTensor forward(SparseConvNetTensor input) {
@@ -75,6 +107,9 @@ public:
     }
 };
 
+int SubmanifoldConvolution::layer_id = 0;
+
+
 class Convolution : public torch::nn::Module
 {
 public:
@@ -86,6 +121,9 @@ public:
     torch::Tensor filter_stride;
     
     torch::Tensor weight;
+
+    static int layer_id;
+    std::string layer_name;
 
     Convolution(int dimension_, 
                 int nIn_, 
@@ -103,6 +141,13 @@ public:
         weight = this->register_parameter("weight", torch::empty({filter_volume, nIn, nOut}).normal_(0, std).cuda());
         if(bias_)  {
             // Not implemented yet
+        }
+
+        layer_name = std::string("Convolution_") + std::to_string(layer_id);
+        layer_id++;
+
+        if(path.length())   {
+            weight = LoadNpy(layer_name, weight);
         }
     }
 
@@ -131,6 +176,7 @@ public:
         return output;
     }
 };
+int Convolution::layer_id = 0;
 
 
 class Deconvolution : public torch::nn::Module
@@ -144,6 +190,9 @@ public:
     torch::Tensor filter_stride;
     
     torch::Tensor weight;
+
+    static int layer_id;
+    std::string layer_name;
 
     Deconvolution(int dimension_, 
                 int nIn_, 
@@ -161,6 +210,12 @@ public:
         weight = this->register_parameter("weight", torch::empty({filter_volume, nIn, nOut}).normal_(0, std).cuda());
         if(bias_)  {
             // Not implemented yet
+        }
+        layer_name = std::string("Deconvolution_") + std::to_string(layer_id);
+        layer_id++;
+
+        if(path.length())   {
+            weight = LoadNpy(layer_name, weight);
         }
     }
 
@@ -187,6 +242,7 @@ public:
         return output;     
     }
 };
+int Deconvolution::layer_id = 0;
 
 class InputLayer : public torch::nn::Module   {
 public:
@@ -271,6 +327,9 @@ public:
     torch::Tensor weight;
     torch::Tensor bias;
 
+    static int layer_id;
+    std::string layer_name;
+
     BatchNormLeakyReLU(int nPlanes_, 
                        double eps_ = 1e-4, 
                        double momentum_=0.9,
@@ -286,6 +345,14 @@ public:
 
         weight = register_parameter("weight", torch::empty(nPlanes).fill_(1).cuda());
         bias = register_parameter("bias", torch::empty(nPlanes).fill_(0).cuda());
+    
+        layer_name = std::string("BatchNormLeakyReLU_") + std::to_string(layer_id);
+        layer_id++;
+
+        if(path.length())   {
+            weight = LoadNpy(layer_name + std::string("weight"), weight);
+            bias = LoadNpy(layer_name + std::string("bias"), bias);
+        }
     }
 
     SparseConvNetTensor forward(SparseConvNetTensor input) {
@@ -318,7 +385,7 @@ public:
         return output;
     }
 };
-
+int BatchNormLeakyReLU::layer_id = 0;
 
 class ConcatTable : public torch::nn::Module
 {
@@ -411,16 +478,33 @@ Sequential unet_build(int depth)  {
     return seq;
 }
 
-UNet::UNet() 
+UNet::UNet(std::string weights_path) 
 {
     long spatial_size[] = {16, 16, 16};
     torch::Tensor spatial_size_tensor = torch::from_blob(spatial_size, {3}, torch::dtype(torch::kInt64));
     int dimension = 3;
     
+    path = weights_path;
     // Recursively build unet
-#if 1
+#if 0
 
     auto linear = torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true));
+    linear->to(torch::kCUDA);
+
+    seq = torch::nn::Sequential(
+        InputLayer(dimension, spatial_size_tensor, 4),
+        Sequential().add(
+            SubmanifoldConvolution(dimension, 1, 1, 3, false)
+        ),
+        OutputLayer(dimension)
+        // linear
+    );
+#endif
+
+#if 1
+    auto linear = torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true));
+    linear->weight = LoadNpy(std::string("Linear_weight"), linear->weight);
+    linear->bias = LoadNpy(std::string("Linear_bias"), linear->bias);
     linear->to(torch::kCUDA);
 
     seq = torch::nn::Sequential(
@@ -435,22 +519,7 @@ UNet::UNet()
         OutputLayer(dimension),
         linear
     );
-#endif
-
-#if 0
-    auto linear = torch::nn::Linear(torch::nn::LinearOptions(m, 20).with_bias(true));
-    linear->to(torch::kCUDA);
-
-    seq = torch::nn::Sequential(
-        InputLayer(dimension, spatial_size_tensor, 4),
-        ConcatTable().add(
-            Identity()).add(
-            Sequential().add(
-                Convolution(dimension,3,m,2,2,false)).add(
-                Deconvolution(dimension,m,1,2,2,false))),
-        OutputLayer(dimension)
-        // linear
-    );
+    
 #endif
 
     std::string name = "sparsemodel";
@@ -460,9 +529,4 @@ UNet::UNet()
 torch::Tensor UNet::forward(torch::Tensor coords, torch::Tensor features){
     auto input = std::make_tuple(coords, features);
     return seq->forward(input);
-}
-
-int UNet::load()   {
-
-
 }
