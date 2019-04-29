@@ -26,7 +26,7 @@ int main() {
   torch::Tensor test_features = torch::from_blob(test_features_, {6,3}, torch::dtype(torch::kFloat32));
 
   // std::string dir = "";
-  std::string dir = "/home/zheng/Desktop/cpp/original/SparseConvNet/examples/ScanNet_original/weight";
+  std::string dir = "/home/zheng/Desktop/SparseConvNet_training/examples/ScanNet/weight";
 
   auto model = UNet(dir);
   auto output = model.forward(test_coord, test_features);

@@ -453,6 +453,97 @@ public:
     torch::nn::Sequential _modules;
 };
 
+class AddTable : public torch::nn::Module
+{
+public:
+    AddTable() {}
+
+    template<typename ModuleType>
+    AddTable& add(ModuleType module)
+    {
+        _modules->push_back(module);
+        return *this;
+    }
+
+    SparseConvNetTensor forward(SparseConvNetTensor input)  
+    {
+        // Forward for each submodule
+        std::vector<SparseConvNetTensor> values;
+        auto iterator = _modules->begin();
+        for (; iterator != _modules->end(); ++iterator) {
+            values.push_back( iterator->forward<SparseConvNetTensor>(input));
+        }
+        
+        // AddTable
+        SparseConvNetTensor output;
+        output.metadata = values[0].metadata;
+        output.spatial_size = values[0].spatial_size;
+
+        auto iterator_vector = values.begin();
+        output.features = iterator_vector->features;
+        for (++iterator_vector; iterator_vector != values.end(); ++iterator_vector) {
+
+            output.features += iterator_vector->features;
+        }
+        
+        return output;
+    }
+
+    torch::nn::Sequential _modules;
+};
+
+class NetworkInNetwork : public torch::nn::Module
+{
+public:
+    int nIn;
+    int nOut;
+    torch::Tensor weight;
+    std::string weight_name;
+
+    NetworkInNetwork(int nIn_, 
+                    int nOut_,
+                    bool bias_)
+    {
+        nIn = nIn_;
+        nOut = nOut_;
+
+        double std = sqrt((2.0 / nIn));
+        weight = this->register_parameter("weight", torch::empty({nIn, nOut}).normal_(0, std).cuda());
+
+        weight_name = std::string("unet_") + std::to_string(weight_count++);
+
+        if(bias_)  {
+            // Not implemented yet
+        }
+
+        std::cout << "NetworkInNetwork " << nIn << " -> " << nOut << std::endl;
+
+        if(path.length())   {
+            weight = LoadNpy(weight_name, weight);
+        }
+    }
+
+    SparseConvNetTensor forward(SparseConvNetTensor input) {
+        assert(input.features.size(0) == 0 || input.features.size(1) == nIn);
+        SparseConvNetTensor output;
+        output.metadata = input.metadata;
+        output.spatial_size = input.spatial_size;
+        
+        auto options = input.features.options();
+        output.features = torch::empty(0, options);
+
+        NetworkInNetwork_updateOutput(
+            input.features,
+            output.features,
+            weight,
+            torch::empty(0,options));
+        
+        return output;
+    }
+};
+
+
+
 // The original torch::nn::Sequential does not support nesting due to templatized return type,
 // here is a little hack to support nesting by specifying return type.
 
@@ -477,21 +568,37 @@ SparseConvNetTensor Sequential::forward(SparseConvNetTensor input)  {
 const int m = 16;
 const int unet_depth = 7;
 
-Sequential unet_block(int a, int b) {
-    Sequential block;
-    block.add(BatchNormLeakyReLU(a));
-    block.add(SubmanifoldConvolution(3, a, b, 3, false));
-    return block;
+Sequential unet_block(int a, int b, bool residual_block) {
+    if(residual_block)  {
+        AddTable block;
+        if(a == b)
+            block.add(Identity());
+        else
+            block.add(NetworkInNetwork(a,b,false));
+        Sequential foo;
+        foo.add(BatchNormLeakyReLU(a));
+        foo.add(SubmanifoldConvolution(3, a, b, 3, false));
+        foo.add(BatchNormLeakyReLU(b));
+        foo.add(SubmanifoldConvolution(3, b, b, 3, false));
+
+        block.add(foo);
+        return Sequential().add(block);
+    } else  {
+        Sequential block;
+        block.add(BatchNormLeakyReLU(a));
+        block.add(SubmanifoldConvolution(3, a, b, 3, false));
+        return block;
+    }
 }
 
-Sequential unet_build(int depth)  {
+Sequential unet_build(int depth, bool residual_block)  {
     Sequential seq;
-    seq.add(unet_block(m*depth, m*depth));
+    seq.add(unet_block(m*depth, m*depth, residual_block));
     if(depth < unet_depth) {
         Sequential s;
         s.add(BatchNormLeakyReLU(m*depth));
         s.add(Convolution(3, m*depth, m*(depth+1), 2, 2, false));
-        s.add(unet_build(depth+1));
+        s.add(unet_build(depth+1, residual_block));
         s.add(BatchNormLeakyReLU(m*(depth+1)));
         s.add(Deconvolution(3, m*(depth+1), m*depth, 2, 2, false));
         
@@ -501,7 +608,7 @@ Sequential unet_build(int depth)  {
 
         seq.add(c);
                 
-        seq.add(unet_block(2*m*depth, m*depth));
+        seq.add(unet_block(2*m*depth, m*depth, residual_block));
     }
     return seq;
 }
@@ -536,7 +643,7 @@ UNet::UNet(std::string weights_path)
     
     Sequential body;
     body.add(SubmanifoldConvolution(dimension, 3, m, 3, false));
-    body.add(unet_build(1));
+    body.add(unet_build(1, true));
     body.add(BatchNormLeakyReLU(m));
 
     seq = torch::nn::Sequential(
